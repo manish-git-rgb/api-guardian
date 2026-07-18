@@ -9,12 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.models import Project, SpecVersion, Comparison, ChangeRow
+from app.models.models import Project, SpecVersion, Comparison, ChangeRow, AIReport
 from app.schemas.schemas import (
     ProjectCreate, ProjectOut, SpecVersionCreate, ComparisonOut
 )
 from app.parser.openapi_parser import parse_spec, SpecParseError
 from app.diff.engine import diff_specs, overall_risk_score
+from app.ai.tasks import explain_change_task, generate_ai_reports_task
 
 router = APIRouter()
 
@@ -50,7 +51,7 @@ def upload_spec_version(project_id: str, payload: SpecVersionCreate, db: Session
         raise HTTPException(404, "Project not found")
 
     try:
-        parse_spec(payload.raw_spec, payload.format)  # validate it's parseable before saving
+        parse_spec(payload.raw_spec, payload.format)
     except SpecParseError as e:
         raise HTTPException(400, str(e))
 
@@ -65,6 +66,15 @@ def upload_spec_version(project_id: str, payload: SpecVersionCreate, db: Session
     db.refresh(version)
     return {"id": version.id, "version_label": version.version_label}
 
+@router.get("/projects/{project_id}/versions")
+def list_spec_versions(project_id: str, db: Session = Depends(get_db)):
+    versions = db.query(SpecVersion).filter(
+        SpecVersion.project_id == project_id
+    ).order_by(SpecVersion.created_at).all()
+    return [
+        {"id": v.id, "version_label": v.version_label}
+        for v in versions
+    ]
 
 @router.post("/projects/{project_id}/compare", response_model=ComparisonOut)
 def compare_versions(
@@ -91,10 +101,11 @@ def compare_versions(
         risk_score=risk.value,
     )
     db.add(comparison)
-    db.flush()  # get comparison.id before inserting children
+    db.flush()
 
+    change_rows = []
     for c in changes:
-        db.add(ChangeRow(
+        row = ChangeRow(
             comparison_id=comparison.id,
             path=c.path,
             method=c.method,
@@ -104,10 +115,20 @@ def compare_versions(
             old_value=c.old_value,
             new_value=c.new_value,
             description=c.description,
-        ))
+        )
+        db.add(row)
+        change_rows.append(row)
 
     db.commit()
     db.refresh(comparison)
+
+    # Fire AI explanation jobs asynchronously — doesn't block this response.
+    for row in change_rows:
+        explain_change_task.delay(row.id)
+
+    if change_rows:
+        generate_ai_reports_task.delay(comparison.id)
+
     return comparison
 
 
@@ -117,3 +138,19 @@ def get_comparison(comparison_id: str, db: Session = Depends(get_db)):
     if not comparison:
         raise HTTPException(404, "Comparison not found")
     return comparison
+
+
+@router.get("/comparisons/{comparison_id}/ai-reports")
+def get_ai_reports(comparison_id: str, db: Session = Depends(get_db)):
+    """
+    Returns migration_guide / release_notes AIReport rows for a comparison.
+    Empty list means they haven't finished generating yet (or there were
+    zero changes) — frontend should poll again in a few seconds.
+    """
+    reports = db.query(AIReport).filter(
+        AIReport.comparison_id == comparison_id
+    ).all()
+    return [
+        {"report_type": r.report_type, "content": r.content, "created_at": r.created_at}
+        for r in reports
+    ]

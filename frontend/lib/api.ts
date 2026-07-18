@@ -1,4 +1,3 @@
-
 const API_BASE = "http://127.0.0.1:8000/api";
 
 export type Project = {
@@ -32,6 +31,12 @@ export type Comparison = {
   changes: Change[];
 };
 
+export type AIReport = {
+  report_type: "migration_guide" | "release_notes";
+  content: string;
+  created_at: string;
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -62,9 +67,21 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  // NEW: list already-uploaded versions for a project (persists across reloads)
+  listVersions: (projectId: string) =>
+    request<SpecVersion[]>(`/projects/${projectId}/versions`),
+
   compareVersions: (projectId: string, fromVersionId: string, toVersionId: string) =>
     request<Comparison>(
       `/projects/${projectId}/compare?from_version_id=${fromVersionId}&to_version_id=${toVersionId}`,
       { method: "POST" }
     ),
+
+  // NEW: re-fetch a comparison, used to poll for ai_explanation filling in
+  getComparison: (comparisonId: string) =>
+    request<Comparison>(`/comparisons/${comparisonId}`),
+
+  // NEW: fetch migration guide / release notes once they've been generated
+  getAIReports: (comparisonId: string) =>
+    request<AIReport[]>(`/comparisons/${comparisonId}/ai-reports`),
 };

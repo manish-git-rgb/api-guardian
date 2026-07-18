@@ -1,9 +1,9 @@
 // frontend/app/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Space_Grotesk, JetBrains_Mono, Inter } from "next/font/google";
-import { api, Project, Comparison } from "@/lib/api";
+import { api, Project, Comparison, AIReport } from "@/lib/api";
 
 const display = Space_Grotesk({ subsets: ["latin"], weight: ["500", "700"] });
 const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"] });
@@ -25,6 +25,9 @@ const RISK_STYLES: Record<string, string> = {
 
 type LocalVersion = { id: string; label: string };
 
+const POLL_INTERVAL_MS = 3000;
+const POLL_MAX_ATTEMPTS = 10; // ~30 seconds total
+
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
@@ -41,10 +44,21 @@ export default function Dashboard() {
   const [toId, setToId] = useState("");
 
   const [comparison, setComparison] = useState<Comparison | null>(null);
+  const [aiReports, setAiReports] = useState<AIReport[]>([]);
+  const [aiLoading, setAiLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     refreshProjects();
+  }, []);
+
+  // Stop any in-flight polling if the component unmounts or comparison changes away.
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
 
   async function refreshProjects() {
@@ -96,12 +110,51 @@ export default function Dashboard() {
     }
   }
 
+  function startPollingForAI(comparisonId: string) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setAiLoading(true);
+    let attempts = 0;
+
+    pollRef.current = setInterval(async () => {
+      attempts += 1;
+      try {
+        const [freshComparison, reports] = await Promise.all([
+          api.getComparison(comparisonId),
+          api.getAIReports(comparisonId),
+        ]);
+        setComparison(freshComparison);
+        setAiReports(reports);
+
+        const allExplained =
+          freshComparison.changes.length === 0 ||
+          freshComparison.changes.every((c) => c.ai_explanation);
+        const reportsReady = freshComparison.changes.length === 0 || reports.length > 0;
+
+        if ((allExplained && reportsReady) || attempts >= POLL_MAX_ATTEMPTS) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setAiLoading(false);
+        }
+      } catch {
+        // transient fetch error — just try again next tick, stop after max attempts
+        if (attempts >= POLL_MAX_ATTEMPTS) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          setAiLoading(false);
+        }
+      }
+    }, POLL_INTERVAL_MS);
+  }
+
   async function runCompare() {
     if (!selected || !fromId || !toId) return;
     setBusy(true);
     setError(null);
+    setAiReports([]);
     try {
-      setComparison(await api.compareVersions(selected.id, fromId, toId));
+      const result = await api.compareVersions(selected.id, fromId, toId);
+      setComparison(result);
+      if (result.changes.length > 0) {
+        startPollingForAI(result.id);
+      }
     } catch {
       setError("Comparison failed.");
     } finally {
@@ -109,12 +162,21 @@ export default function Dashboard() {
     }
   }
 
-  function selectProject(p: Project) {
+  async function selectProject(p: Project) {
+    if (pollRef.current) clearInterval(pollRef.current);
     setSelected(p);
     setVersions([]);
     setComparison(null);
+    setAiReports([]);
+    setAiLoading(false);
     setFromId("");
     setToId("");
+    try {
+      const existing = await api.listVersions(p.id);
+      setVersions(existing.map((v) => ({ id: v.id, label: v.version_label })));
+    } catch {
+      setError("Couldn't load existing versions for this project.");
+    }
   }
 
   return (
@@ -273,12 +335,19 @@ export default function Dashboard() {
               {/* Results */}
               {comparison && (
                 <div className="flex flex-col gap-4">
-                  <div
-                    className={`inline-flex items-center gap-2 self-start border rounded-full px-4 py-1.5 ${RISK_STYLES[comparison.risk_score] ?? "border-neutral-700 text-neutral-300"}`}
-                  >
-                    <span className={`${mono.className} text-xs uppercase tracking-wider`}>
-                      risk: {comparison.risk_score}
-                    </span>
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={`inline-flex items-center gap-2 self-start border rounded-full px-4 py-1.5 ${RISK_STYLES[comparison.risk_score] ?? "border-neutral-700 text-neutral-300"}`}
+                    >
+                      <span className={`${mono.className} text-xs uppercase tracking-wider`}>
+                        risk: {comparison.risk_score}
+                      </span>
+                    </div>
+                    {aiLoading && (
+                      <span className={`${mono.className} text-xs text-neutral-500`}>
+                        generating AI insights…
+                      </span>
+                    )}
                   </div>
 
                   {comparison.changes.length === 0 && (
@@ -302,6 +371,26 @@ export default function Dashboard() {
                         </span>
                       </div>
                       <p className="text-sm text-neutral-300">{c.description}</p>
+                      {c.ai_explanation && (
+                        <div className="mt-1 pt-2 border-t border-white/10">
+                          <span className={`${mono.className} text-[10px] uppercase tracking-wider text-neutral-500`}>
+                            AI explanation
+                          </span>
+                          <p className="text-sm text-neutral-300 mt-1">{c.ai_explanation}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+
+                  {/* AI reports: migration guide + release notes */}
+                  {aiReports.map((r) => (
+                    <div key={r.report_type} className="border border-neutral-800 rounded-lg p-4 flex flex-col gap-2">
+                      <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
+                        {r.report_type === "migration_guide" ? "Migration guide" : "Release notes"}
+                      </span>
+                      <pre className="text-sm text-neutral-300 whitespace-pre-wrap font-sans">
+                        {r.content}
+                      </pre>
                     </div>
                   ))}
                 </div>
