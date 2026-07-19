@@ -154,3 +154,72 @@ def get_ai_reports(comparison_id: str, db: Session = Depends(get_db)):
         {"report_type": r.report_type, "content": r.content, "created_at": r.created_at}
         for r in reports
     ]
+
+@router.delete("/comparisons/{comparison_id}")
+def delete_comparison(comparison_id: str, db: Session = Depends(get_db)):
+    comparison = db.query(Comparison).filter(Comparison.id == comparison_id).first()
+    if not comparison:
+        raise HTTPException(404, "Comparison not found")
+
+    # ChangeRow and AIReport rows cascade-delete automatically — Comparison's
+    # relationships to both are configured with cascade="all, delete-orphan"
+    # in models.py, so this single delete cleans up everything underneath it.
+    db.delete(comparison)
+    db.commit()
+    return {"deleted": True}
+
+
+@router.delete("/projects/{project_id}/versions/{version_id}")
+def delete_spec_version(project_id: str, version_id: str, db: Session = Depends(get_db)):
+    version = db.query(SpecVersion).filter(
+        SpecVersion.id == version_id,
+        SpecVersion.project_id == project_id,
+    ).first()
+    if not version:
+        raise HTTPException(404, "Spec version not found")
+
+    # Block deletion if any comparison still references this version —
+    # otherwise this would fail with a raw FK constraint error from Postgres.
+    in_use = db.query(Comparison).filter(
+        (Comparison.from_version_id == version_id) | (Comparison.to_version_id == version_id)
+    ).first()
+    if in_use:
+        raise HTTPException(
+            400,
+            "This version is used in an existing comparison. Delete that comparison first."
+        )
+
+    db.delete(version)
+    db.commit()
+    return {"deleted": True}
+
+
+@router.delete("/projects/{project_id}")
+def delete_project(project_id: str, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(404, "Project not found")
+
+    version_ids = [
+        v.id for v in db.query(SpecVersion.id).filter(SpecVersion.project_id == project_id).all()
+    ]
+
+    # Catch comparisons two ways: the normal case (comparison.project_id
+    # matches), and the edge case where a comparison references one of this
+    # project's versions but has a mismatched project_id (possible from
+    # earlier manual testing where /compare didn't validate that
+    # from/to versions actually belong to the given project).
+    comparisons = db.query(Comparison).filter(
+        (Comparison.project_id == project_id)
+        | (Comparison.from_version_id.in_(version_ids))
+        | (Comparison.to_version_id.in_(version_ids))
+    ).all()
+    for comp in comparisons:
+        db.delete(comp)
+
+    # Execute DELETE FROM comparisons first
+    db.flush()
+
+    db.delete(project)
+    db.commit()
+    return {"deleted": True}

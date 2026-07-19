@@ -26,7 +26,7 @@ const RISK_STYLES: Record<string, string> = {
 type LocalVersion = { id: string; label: string };
 
 const POLL_INTERVAL_MS = 3000;
-const POLL_MAX_ATTEMPTS = 10; // ~30 seconds total
+const POLL_MAX_ATTEMPTS = 10;
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -54,7 +54,6 @@ export default function Dashboard() {
     refreshProjects();
   }, []);
 
-  // Stop any in-flight polling if the component unmounts or comparison changes away.
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -89,6 +88,31 @@ export default function Dashboard() {
     }
   }
 
+  async function handleDeleteProject(p: Project, e: React.MouseEvent) {
+    e.stopPropagation(); // don't trigger selectProject when clicking delete
+    const confirmed = window.confirm(
+      `Delete project "${p.name}" and all its versions/comparisons? This can't be undone.`
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteProject(p.id);
+      if (selected?.id === p.id) {
+        setSelected(null);
+        setVersions([]);
+        setComparison(null);
+        setAiReports([]);
+      }
+      await refreshProjects();
+    } catch {
+      setError("Couldn't delete the project.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadVersion(e: React.FormEvent) {
     e.preventDefault();
     if (!selected || !label.trim() || !rawSpec.trim()) return;
@@ -105,6 +129,30 @@ export default function Dashboard() {
       setRawSpec("");
     } catch {
       setError("Couldn't parse that spec — check it's valid OpenAPI JSON.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteVersion(v: LocalVersion) {
+    if (!selected) return;
+    const confirmed = window.confirm(`Delete version "${v.label}"?`);
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteVersion(selected.id, v.id);
+      setVersions((prev) => prev.filter((x) => x.id !== v.id));
+      if (fromId === v.id) setFromId("");
+      if (toId === v.id) setToId("");
+    } catch (err) {
+      // Backend returns 400 with a clear message if the version is still
+      // referenced by a comparison — surface that instead of a generic error.
+      const message = err instanceof Error ? err.message : "Couldn't delete that version.";
+      setError(message.includes("used in an existing comparison")
+        ? "That version is still used in a comparison — delete the comparison first."
+        : "Couldn't delete that version.");
     } finally {
       setBusy(false);
     }
@@ -135,7 +183,6 @@ export default function Dashboard() {
           setAiLoading(false);
         }
       } catch {
-        // transient fetch error — just try again next tick, stop after max attempts
         if (attempts >= POLL_MAX_ATTEMPTS) {
           if (pollRef.current) clearInterval(pollRef.current);
           setAiLoading(false);
@@ -157,6 +204,26 @@ export default function Dashboard() {
       }
     } catch {
       setError("Comparison failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDeleteComparison() {
+    if (!comparison) return;
+    const confirmed = window.confirm("Delete this comparison and its AI explanations/reports?");
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteComparison(comparison.id);
+      if (pollRef.current) clearInterval(pollRef.current);
+      setComparison(null);
+      setAiReports([]);
+      setAiLoading(false);
+    } catch {
+      setError("Couldn't delete the comparison.");
     } finally {
       setBusy(false);
     }
@@ -235,17 +302,24 @@ export default function Dashboard() {
               <span className="text-sm text-neutral-500">No projects yet.</span>
             )}
             {projects.map((p) => (
-              <button
+              <div
                 key={p.id}
                 onClick={() => selectProject(p)}
-                className={`text-left px-3 py-2 rounded-md text-sm transition ${
+                className={`group flex items-center justify-between px-3 py-2 rounded-md text-sm transition cursor-pointer ${
                   selected?.id === p.id
                     ? "bg-neutral-800 text-neutral-50"
                     : "text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
                 }`}
               >
-                {p.name}
-              </button>
+                <span>{p.name}</span>
+                <button
+                  onClick={(e) => handleDeleteProject(p, e)}
+                  title="Delete project"
+                  className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition text-xs px-1.5"
+                >
+                  ✕
+                </button>
+              </div>
             ))}
           </div>
         </aside>
@@ -292,6 +366,32 @@ export default function Dashboard() {
                   Upload
                 </button>
               </form>
+
+              {/* Versions list with delete buttons */}
+              {versions.length > 0 && (
+                <div className="flex flex-col gap-2">
+                  <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
+                    Uploaded versions
+                  </span>
+                  <div className="flex flex-col gap-1.5">
+                    {versions.map((v) => (
+                      <div
+                        key={v.id}
+                        className="group flex items-center justify-between bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2"
+                      >
+                        <span className={`${mono.className} text-sm text-neutral-300`}>{v.label}</span>
+                        <button
+                          onClick={() => handleDeleteVersion(v)}
+                          title="Delete version"
+                          className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 transition text-xs px-1.5"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Uploaded versions + compare */}
               {versions.length > 0 && (
@@ -348,6 +448,12 @@ export default function Dashboard() {
                         generating AI insights…
                       </span>
                     )}
+                    <button
+                      onClick={handleDeleteComparison}
+                      className="ml-auto text-xs text-neutral-500 hover:text-red-400 transition"
+                    >
+                      Delete comparison
+                    </button>
                   </div>
 
                   {comparison.changes.length === 0 && (
@@ -382,7 +488,6 @@ export default function Dashboard() {
                     </div>
                   ))}
 
-                  {/* AI reports: migration guide + release notes */}
                   {aiReports.map((r) => (
                     <div key={r.report_type} className="border border-neutral-800 rounded-lg p-4 flex flex-col gap-2">
                       <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>

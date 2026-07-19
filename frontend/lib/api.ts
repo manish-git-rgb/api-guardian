@@ -67,7 +67,6 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
-  // NEW: list already-uploaded versions for a project (persists across reloads)
   listVersions: (projectId: string) =>
     request<SpecVersion[]>(`/projects/${projectId}/versions`),
 
@@ -77,11 +76,21 @@ export const api = {
       { method: "POST" }
     ),
 
-  // NEW: re-fetch a comparison, used to poll for ai_explanation filling in
   getComparison: (comparisonId: string) =>
     request<Comparison>(`/comparisons/${comparisonId}`),
 
-  // NEW: fetch migration guide / release notes once they've been generated
   getAIReports: (comparisonId: string) =>
     request<AIReport[]>(`/comparisons/${comparisonId}/ai-reports`),
+
+  // NEW: delete endpoints
+  deleteProject: (projectId: string) =>
+    request<{ deleted: boolean }>(`/projects/${projectId}`, { method: "DELETE" }),
+
+  deleteVersion: (projectId: string, versionId: string) =>
+    request<{ deleted: boolean }>(`/projects/${projectId}/versions/${versionId}`, {
+      method: "DELETE",
+    }),
+
+  deleteComparison: (comparisonId: string) =>
+    request<{ deleted: boolean }>(`/comparisons/${comparisonId}`, { method: "DELETE" }),
 };
