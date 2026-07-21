@@ -20,7 +20,7 @@ def create_tables():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten this before deploying publicly
+    allow_origins=["http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
