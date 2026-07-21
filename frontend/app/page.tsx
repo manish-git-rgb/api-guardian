@@ -2,8 +2,9 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { Space_Grotesk, JetBrains_Mono, Inter } from "next/font/google";
-import { api, Project, Comparison, AIReport } from "@/lib/api";
+import { api, Project, Comparison, AIReport, clearToken, isLoggedIn } from "@/lib/api";
 
 const display = Space_Grotesk({ subsets: ["latin"], weight: ["500", "700"] });
 const mono = JetBrains_Mono({ subsets: ["latin"], weight: ["400", "500"] });
@@ -29,6 +30,10 @@ const POLL_INTERVAL_MS = 3000;
 const POLL_MAX_ATTEMPTS = 10;
 
 export default function Dashboard() {
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,15 +55,36 @@ export default function Dashboard() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Auth check on mount — redirect to /login if not authenticated
   useEffect(() => {
-    refreshProjects();
-  }, []);
+    async function checkAuth() {
+      if (!isLoggedIn()) {
+        router.replace("/login");
+        return;
+      }
+      try {
+        const user = await api.me();
+        setUserEmail(user.email);
+        setAuthChecked(true);
+        refreshProjects();
+      } catch {
+        clearToken();
+        router.replace("/login");
+      }
+    }
+    checkAuth();
+  }, [router]);
 
   useEffect(() => {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
   }, []);
+
+  function handleLogout() {
+    clearToken();
+    router.replace("/login");
+  }
 
   async function refreshProjects() {
     try {
@@ -89,7 +115,7 @@ export default function Dashboard() {
   }
 
   async function handleDeleteProject(p: Project, e: React.MouseEvent) {
-    e.stopPropagation(); // don't trigger selectProject when clicking delete
+    e.stopPropagation();
     const confirmed = window.confirm(
       `Delete project "${p.name}" and all its versions/comparisons? This can't be undone.`
     );
@@ -147,8 +173,6 @@ export default function Dashboard() {
       if (fromId === v.id) setFromId("");
       if (toId === v.id) setToId("");
     } catch (err) {
-      // Backend returns 400 with a clear message if the version is still
-      // referenced by a comparison — surface that instead of a generic error.
       const message = err instanceof Error ? err.message : "Couldn't delete that version.";
       setError(message.includes("used in an existing comparison")
         ? "That version is still used in a comparison — delete the comparison first."
@@ -246,6 +270,14 @@ export default function Dashboard() {
     }
   }
 
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-[#0B0E14] text-neutral-500 flex items-center justify-center text-sm">
+        Loading…
+      </div>
+    );
+  }
+
   return (
     <div className={`${body.className} min-h-screen bg-[#0B0E14] text-neutral-200`}>
       <header className="border-b border-neutral-800 px-8 py-5 flex items-center gap-3">
@@ -256,6 +288,17 @@ export default function Dashboard() {
         <span className={`${mono.className} text-xs text-neutral-500 ml-1`}>
           breaking-change detector
         </span>
+        <div className="ml-auto flex items-center gap-4">
+          {userEmail && (
+            <span className={`${mono.className} text-xs text-neutral-500`}>{userEmail}</span>
+          )}
+          <button
+            onClick={handleLogout}
+            className="text-xs text-neutral-500 hover:text-neutral-200 transition"
+          >
+            Log out
+          </button>
+        </div>
       </header>
 
       {error && (
@@ -265,7 +308,6 @@ export default function Dashboard() {
       )}
 
       <div className="grid grid-cols-[280px_1fr] min-h-[calc(100vh-73px)]">
-        {/* Sidebar: projects */}
         <aside className="border-r border-neutral-800 p-5 flex flex-col gap-5">
           <form onSubmit={createProject} className="flex flex-col gap-2">
             <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
@@ -324,7 +366,6 @@ export default function Dashboard() {
           </div>
         </aside>
 
-        {/* Main panel */}
         <main className="p-8">
           {!selected && (
             <div className="text-neutral-500 text-sm">
@@ -341,7 +382,6 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Upload version */}
               <form onSubmit={uploadVersion} className="flex flex-col gap-2">
                 <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
                   Upload spec version
@@ -367,7 +407,6 @@ export default function Dashboard() {
                 </button>
               </form>
 
-              {/* Versions list with delete buttons */}
               {versions.length > 0 && (
                 <div className="flex flex-col gap-2">
                   <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
@@ -393,7 +432,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Uploaded versions + compare */}
               {versions.length > 0 && (
                 <div className="flex flex-col gap-3">
                   <span className={`${mono.className} text-[11px] uppercase tracking-wider text-neutral-500`}>
@@ -432,7 +470,6 @@ export default function Dashboard() {
                 </div>
               )}
 
-              {/* Results */}
               {comparison && (
                 <div className="flex flex-col gap-4">
                   <div className="flex items-center gap-3">
