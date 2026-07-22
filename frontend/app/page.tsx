@@ -45,6 +45,7 @@ export default function Dashboard() {
   const [versions, setVersions] = useState<LocalVersion[]>([]);
   const [label, setLabel] = useState("");
   const [rawSpec, setRawSpec] = useState("");
+  const [specFormat, setSpecFormat] = useState<"json" | "yaml">("json");
   const [fromId, setFromId] = useState("");
   const [toId, setToId] = useState("");
 
@@ -55,7 +56,6 @@ export default function Dashboard() {
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Auth check on mount — redirect to /login if not authenticated
   useEffect(() => {
     async function checkAuth() {
       if (!isLoggedIn()) {
@@ -147,14 +147,14 @@ export default function Dashboard() {
     try {
       const v = await api.uploadVersion(selected.id, {
         version_label: label,
-        format: "json",
+        format: specFormat,
         raw_spec: rawSpec,
       });
       setVersions((prev) => [...prev, { id: v.id, label: v.version_label }]);
       setLabel("");
       setRawSpec("");
     } catch {
-      setError("Couldn't parse that spec — check it's valid OpenAPI JSON.");
+      setError(`Couldn't parse that spec — check it's valid OpenAPI ${specFormat.toUpperCase()}.`);
     } finally {
       setBusy(false);
     }
@@ -392,10 +392,18 @@ export default function Dashboard() {
                   placeholder="Version label (e.g. v1, v2)"
                   className="bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 text-sm outline-none focus:border-neutral-600"
                 />
+                <select
+                  value={specFormat}
+                  onChange={(e) => setSpecFormat(e.target.value as "json" | "yaml")}
+                  className="bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 text-sm self-start"
+                >
+                  <option value="json">JSON</option>
+                  <option value="yaml">YAML</option>
+                </select>
                 <textarea
                   value={rawSpec}
                   onChange={(e) => setRawSpec(e.target.value)}
-                  placeholder="Paste OpenAPI spec as JSON here"
+                  placeholder={specFormat === "json" ? "Paste OpenAPI spec as JSON here" : "Paste OpenAPI spec as YAML here"}
                   rows={6}
                   className={`${mono.className} bg-neutral-900 border border-neutral-800 rounded-md px-3 py-2 text-xs outline-none focus:border-neutral-600 resize-y`}
                 />
