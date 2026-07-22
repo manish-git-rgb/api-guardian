@@ -107,6 +107,12 @@ export default function Dashboard() {
       setNewDesc("");
       await refreshProjects();
       setSelected(project);
+      setVersions([]);
+      setComparison(null);
+      setAiReports([]);
+      setAiLoading(false);
+      setFromId("");
+      setToId("");
     } catch {
       setError("Couldn't create the project.");
     } finally {
