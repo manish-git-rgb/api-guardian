@@ -9,15 +9,21 @@ services:
       POSTGRES_PASSWORD: 280105
       POSTGRES_DB: api_guardian
     ports:
-      - "5433:5432"  # host:container — 5433 avoids clashing with your existing local Postgres on 5432
+      - "5433:5432" # host:container
     volumes:
       - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d api_guardian"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6380:6379"  # host:container — 6380 avoids clashing with Memurai on 6379
+      - "6380:6379"
 
   backend:
     build: ./backend
@@ -25,9 +31,6 @@ services:
     env_file:
       - ./backend/.env
     environment:
-      # Override these to point at Docker service names instead of localhost —
-      # everything else (GEMINI_API_KEY, JWT_SECRET_KEY, GOOGLE_*, etc.)
-      # still comes from backend/.env via env_file above.
       DATABASE_URL: postgresql://postgres:280105@db:5432/api_guardian
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
@@ -36,9 +39,13 @@ services:
     volumes:
       - ./backend:/app
     depends_on:
-      - db
-      - redis
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: >
+      sh -c "alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
   celery-worker:
     build: ./backend
@@ -52,8 +59,10 @@ services:
     volumes:
       - ./backend:/app
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     command: celery -A app.core.celery_app worker --loglevel=info
 
   frontend:
