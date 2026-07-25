@@ -1,0 +1,61 @@
+# .github/workflows/api-guardian-check.yml
+#
+# Automatically runs API Guardian whenever a pull request changes the
+# OpenAPI spec file, posts a breaking-change report as a PR comment, and
+# fails the check if the risk is critical or high.
+#
+# SETUP:
+# 1. Update SPEC_PATH below to the actual path of your OpenAPI spec file
+#    in this repo (e.g. "openapi.json", "docs/spec.yaml", etc.)
+# 2. (Optional) Add a repo secret named GEMINI_API_KEY if you want
+#    AI-generated explanations/migration guide/release notes in the PR
+#    comment. Without it, the comment still works — just with rule-based
+#    descriptions instead of AI explanations.
+# 3. GITHUB_TOKEN is provided automatically by GitHub Actions — no setup needed.
+
+name: API Guardian Check
+
+on:
+  pull_request:
+    paths:
+      - "openapi.json"   # <-- change this to your actual spec file path
+
+env:
+  SPEC_PATH: "openapi.json"   # <-- keep in sync with the path above
+
+jobs:
+  check-breaking-changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write   # needed to post the PR comment
+      contents: read
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history, needed to read the base version of the file
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Extract base and head spec versions
+        run: |
+          mkdir -p /tmp/api-guardian
+          git show ${{ github.event.pull_request.base.sha }}:${{ env.SPEC_PATH }} > /tmp/api-guardian/old_spec.json || echo "{}" > /tmp/api-guardian/old_spec.json
+          git show ${{ github.sha }}:${{ env.SPEC_PATH }} > /tmp/api-guardian/new_spec.json
+
+      - name: Run API Guardian comparison
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/gha_compare.py \
+            --old /tmp/api-guardian/old_spec.json \
+            --new /tmp/api-guardian/new_spec.json
