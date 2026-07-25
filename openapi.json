@@ -1,0 +1,26 @@
+{
+  "openapi": "3.0.0",
+  "info": { "title": "Sample API", "version": "1.0.0" },
+  "paths": {
+    "/widgets": {
+      "get": {
+        "summary": "List widgets",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "summary": "Create a widget",
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/widgets/{id}": {
+      "get": {
+        "summary": "Get a widget",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "delete": {
+        "summary": "Delete a widget",
+        "responses": { "204": { "description": "Deleted" } }
+      }
+    }
+  }
+}
