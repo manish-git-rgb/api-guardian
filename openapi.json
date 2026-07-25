@@ -16,10 +16,6 @@
       "get": {
         "summary": "Get a widget",
         "responses": { "200": { "description": "OK" } }
-      },
-      "delete": {
-        "summary": "Delete a widget",
-        "responses": { "204": { "description": "Deleted" } }
       }
     }
   }
